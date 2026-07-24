@@ -1,0 +1,74 @@
+name: Automated Semgrep Security Scan
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  semgrep-scan:
+    name: Scan PHP Source Code
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download repository source code
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install Semgrep
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install semgrep
+
+      - name: Display Semgrep version
+        run: semgrep --version
+
+      - name: Run Semgrep and generate JSON report
+        continue-on-error: true
+        run: |
+          semgrep scan \
+            --config auto \
+            --json \
+            --output semgrep-report.json \
+            .
+
+      - name: Generate readable text report
+        continue-on-error: true
+        run: |
+          semgrep scan \
+            --config auto \
+            --text \
+            --output semgrep-report.txt \
+            .
+
+      - name: Display report summary
+        if: always()
+        run: |
+          echo "Semgrep scan completed."
+          if [ -f semgrep-report.txt ]; then
+            cat semgrep-report.txt
+          else
+            echo "Text report was not generated."
+          fi
+
+      - name: Upload Semgrep reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: semgrep-security-reports
+          path: |
+            semgrep-report.json
+            semgrep-report.txt
+          if-no-files-found: warn
+          retention-days: 30
