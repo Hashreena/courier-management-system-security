@@ -1,4 +1,4 @@
-name: Automated Semgrep Security Scan
+name: Semgrep Security Scan and Jira Integration
 
 on:
   push:
@@ -13,28 +13,35 @@ permissions:
   contents: read
 
 jobs:
-  semgrep-scan:
-    name: Scan PHP Source Code
+  semgrep-security-scan:
+    name: Semgrep Security Analysis
     runs-on: ubuntu-latest
 
     steps:
-      - name: Download repository source code
-        uses: actions/checkout@v6
+      # 1. Download the repository code into the temporary Ubuntu runner
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
+      # 2. Install Python
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+          cache: pip
 
-      - name: Install Semgrep
+      # 3. Install Semgrep and the Requests library used for Jira API calls
+      - name: Install security scanning dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install semgrep
+          python -m pip install semgrep requests
 
+      # 4. Display the installed Semgrep version
       - name: Display Semgrep version
         run: semgrep --version
 
-      - name: Run Semgrep and generate JSON report
+      # 5. Run Semgrep and generate the JSON report
+      # The workflow continues even when Semgrep detects findings
+      - name: Run Semgrep security scan
         continue-on-error: true
         run: |
           semgrep scan \
@@ -43,25 +50,190 @@ jobs:
             --output semgrep-report.json \
             .
 
-      - name: Generate readable text report
-        continue-on-error: true
-        run: |
-          semgrep scan \
-            --config auto \
-            --text \
-            --output semgrep-report.txt \
-            .
-
-      - name: Display report summary
+      # 6. Confirm that a JSON report exists even if the scan encounters an error
+      - name: Ensure JSON report exists
         if: always()
         run: |
-          echo "Semgrep scan completed."
-          if [ -f semgrep-report.txt ]; then
-            cat semgrep-report.txt
-          else
-            echo "Text report was not generated."
+          if [ ! -f semgrep-report.json ]; then
+            echo '{"results": [], "errors": ["Semgrep report was not generated"]}' > semgrep-report.json
           fi
 
+      # 7. Convert the JSON results into a readable text report
+      - name: Generate readable text report
+        if: always()
+        run: |
+          python - <<'PYTHON'
+          import json
+          from pathlib import Path
+
+          report_path = Path("semgrep-report.json")
+          output_path = Path("semgrep-report.txt")
+
+          try:
+              report = json.loads(report_path.read_text(encoding="utf-8"))
+          except (OSError, json.JSONDecodeError) as error:
+              output_path.write_text(
+                  f"Unable to read Semgrep report: {error}\n",
+                  encoding="utf-8",
+              )
+              raise SystemExit(0)
+
+          results = report.get("results", [])
+          errors = report.get("errors", [])
+
+          severity_counts = {
+              "CRITICAL": 0,
+              "ERROR": 0,
+              "WARNING": 0,
+              "INFO": 0,
+              "UNKNOWN": 0,
+          }
+
+          lines = [
+              "Courier Management System",
+              "Automated Semgrep Security Scan Report",
+              "=" * 55,
+              "",
+              f"Total findings: {len(results)}",
+          ]
+
+          for result in results:
+              severity = (
+                  result.get("extra", {})
+                  .get("severity", "UNKNOWN")
+                  .upper()
+              )
+
+              if severity not in severity_counts:
+                  severity = "UNKNOWN"
+
+              severity_counts[severity] += 1
+
+          lines.extend(
+              [
+                  f"Critical findings: {severity_counts['CRITICAL']}",
+                  f"Error findings: {severity_counts['ERROR']}",
+                  f"Warning findings: {severity_counts['WARNING']}",
+                  f"Informational findings: {severity_counts['INFO']}",
+                  "",
+                  "Detailed Findings",
+                  "-" * 55,
+              ]
+          )
+
+          if not results:
+              lines.append("No Semgrep security findings were detected.")
+
+          for number, result in enumerate(results, start=1):
+              extra = result.get("extra", {})
+              start = result.get("start", {})
+
+              lines.extend(
+                  [
+                      "",
+                      f"Finding {number}",
+                      f"Severity: {extra.get('severity', 'UNKNOWN')}",
+                      f"Rule: {result.get('check_id', 'Unknown rule')}",
+                      f"File: {result.get('path', 'Unknown file')}",
+                      f"Line: {start.get('line', 'Unknown')}",
+                      f"Message: {extra.get('message', 'No description')}",
+                  ]
+              )
+
+          if errors:
+              lines.extend(
+                  [
+                      "",
+                      "Scan Errors",
+                      "-" * 55,
+                      json.dumps(errors, indent=2),
+                  ]
+              )
+
+          output_path.write_text(
+              "\n".join(lines) + "\n",
+              encoding="utf-8",
+          )
+
+          print(f"Generated {output_path}")
+          PYTHON
+
+      # 8. Produce a dashboard inside the GitHub Actions run
+      - name: Generate GitHub security summary
+        if: always()
+        run: |
+          python - <<'PYTHON'
+          import json
+          import os
+          from collections import Counter
+          from pathlib import Path
+
+          report_path = Path("semgrep-report.json")
+
+          try:
+              report = json.loads(report_path.read_text(encoding="utf-8"))
+              results = report.get("results", [])
+          except (OSError, json.JSONDecodeError):
+              results = []
+
+          severity_counts = Counter(
+              result.get("extra", {})
+              .get("severity", "UNKNOWN")
+              .upper()
+              for result in results
+          )
+
+          summary = [
+              "# Courier Management System Security Scan",
+              "",
+              "## Scan Summary",
+              "",
+              "| Metric | Result |",
+              "|---|---:|",
+              f"| Total findings | {len(results)} |",
+              f"| Critical | {severity_counts.get('CRITICAL', 0)} |",
+              f"| Error | {severity_counts.get('ERROR', 0)} |",
+              f"| Warning | {severity_counts.get('WARNING', 0)} |",
+              f"| Information | {severity_counts.get('INFO', 0)} |",
+              "",
+          ]
+
+          if results:
+              summary.extend(
+                  [
+                      "## Detected Findings",
+                      "",
+                      "| Severity | Rule | File | Line |",
+                      "|---|---|---|---:|",
+                  ]
+              )
+
+              for result in results[:20]:
+                  extra = result.get("extra", {})
+                  summary.append(
+                      "| {severity} | `{rule}` | `{path}` | {line} |".format(
+                          severity=extra.get("severity", "UNKNOWN"),
+                          rule=result.get("check_id", "Unknown"),
+                          path=result.get("path", "Unknown"),
+                          line=result.get("start", {}).get("line", "Unknown"),
+                      )
+                  )
+
+              if len(results) > 20:
+                  summary.append(
+                      f"\nOnly the first 20 of {len(results)} findings are shown."
+                  )
+          else:
+              summary.append("No security findings were detected.")
+
+          github_summary = os.environ.get("GITHUB_STEP_SUMMARY")
+
+          if github_summary:
+              with open(github_summary, "a", encoding="utf-8") as file:
+                  file.write("\n".join(summary) + "\n")
+          PYTHON
+
+      # 9. Upload the reports so they can be downloaded from GitHub Actions
       - name: Upload Semgrep reports
         if: always()
         uses: actions/upload-artifact@v4
@@ -72,3 +244,50 @@ jobs:
             semgrep-report.txt
           if-no-files-found: warn
           retention-days: 30
+
+      # 10. Install dependencies required by the Jira Python script
+      - name: Install API integration dependencies
+        if: always()
+        run: python -m pip install requests
+
+      # 11. Use the Jira API token to create a security issue automatically
+      - name: Create Jira security issue
+        id: jira
+        if: always()
+        continue-on-error: true
+        env:
+          JIRA_BASE_URL: ${{ secrets.JIRA_BASE_URL }}
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+          JIRA_PROJECT_KEY: ${{ secrets.JIRA_PROJECT_KEY }}
+        run: python scripts/create_jira_issue.py
+
+      # 12. Attach the JSON report to the newly created Jira issue
+      - name: Attach Semgrep report to Jira issue
+        if: always() && steps.jira.outputs.issue_key != ''
+        continue-on-error: true
+        env:
+          JIRA_BASE_URL: ${{ secrets.JIRA_BASE_URL }}
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+          JIRA_ISSUE_KEY: ${{ steps.jira.outputs.issue_key }}
+        run: |
+          curl \
+            --request POST \
+            --url "${JIRA_BASE_URL}/rest/api/3/issue/${JIRA_ISSUE_KEY}/attachments" \
+            --user "${JIRA_EMAIL}:${JIRA_API_TOKEN}" \
+            --header "X-Atlassian-Token: no-check" \
+            --header "Accept: application/json" \
+            --form "file=@semgrep-report.json"
+
+      # 13. Display the Jira integration result in the workflow log
+      - name: Display Jira integration result
+        if: always()
+        run: |
+          if [ -n "${{ steps.jira.outputs.issue_key }}" ]; then
+            echo "Jira issue created: ${{ steps.jira.outputs.issue_key }}"
+            echo "Jira URL: ${{ secrets.JIRA_BASE_URL }}/browse/${{ steps.jira.outputs.issue_key }}"
+          else
+            echo "No Jira issue key was returned."
+            echo "Check the Jira integration step logs if findings were detected."
+          fi
