@@ -4,9 +4,11 @@ on:
   push:
     branches:
       - main
+
   pull_request:
     branches:
       - main
+
   workflow_dispatch:
 
 permissions:
@@ -18,7 +20,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # 1. Download repository files
+      # 1. Download the repository files
       - name: Checkout repository
         uses: actions/checkout@v4
 
@@ -34,11 +36,11 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install semgrep requests
 
-      # 4. Show Semgrep version
+      # 4. Display the Semgrep version
       - name: Display Semgrep version
         run: semgrep --version
 
-      # 5. Run Semgrep and create JSON report
+      # 5. Run the Semgrep security scan
       - name: Run Semgrep security scan
         continue-on-error: true
         run: |
@@ -48,7 +50,7 @@ jobs:
             --output semgrep-report.json \
             .
 
-      # 6. Ensure report exists
+      # 6. Ensure that the JSON report exists
       - name: Ensure JSON report exists
         if: always()
         run: |
@@ -56,7 +58,7 @@ jobs:
             echo '{"results": [], "errors": ["Semgrep report was not generated"]}' > semgrep-report.json
           fi
 
-      # 7. Create readable text report
+      # 7. Generate a readable text report
       - name: Generate readable text report
         if: always()
         run: |
@@ -89,14 +91,6 @@ jobs:
               "UNKNOWN": 0,
           }
 
-          lines = [
-              "Courier Management System",
-              "Automated Semgrep Security Scan Report",
-              "=" * 55,
-              "",
-              f"Total findings: {len(results)}",
-          ]
-
           for result in results:
               severity = (
                   result.get("extra", {})
@@ -109,17 +103,20 @@ jobs:
 
               severity_counts[severity] += 1
 
-          lines.extend(
-              [
-                  f"Critical findings: {severity_counts['CRITICAL']}",
-                  f"Error findings: {severity_counts['ERROR']}",
-                  f"Warning findings: {severity_counts['WARNING']}",
-                  f"Informational findings: {severity_counts['INFO']}",
-                  "",
-                  "Detailed Findings",
-                  "-" * 55,
-              ]
-          )
+          lines = [
+              "Courier Management System",
+              "Automated Semgrep Security Scan Report",
+              "=" * 55,
+              "",
+              f"Total findings: {len(results)}",
+              f"Critical findings: {severity_counts['CRITICAL']}",
+              f"Error findings: {severity_counts['ERROR']}",
+              f"Warning findings: {severity_counts['WARNING']}",
+              f"Informational findings: {severity_counts['INFO']}",
+              "",
+              "Detailed Findings",
+              "-" * 55,
+          ]
 
           if not results:
               lines.append(
@@ -160,7 +157,7 @@ jobs:
           print(f"Generated {output_path}")
           PYTHON
 
-      # 8. Generate GitHub Actions summary
+      # 8. Generate the GitHub Actions security summary
       - name: Generate GitHub security summary
         if: always()
         run: |
@@ -217,25 +214,13 @@ jobs:
 
                   summary.append(
                       "| {severity} | `{rule}` | `{path}` | {line} |".format(
-                          severity=extra.get(
-                              "severity",
-                              "UNKNOWN",
-                          ),
-                          rule=result.get(
-                              "check_id",
-                              "Unknown",
-                          ),
-                          path=result.get(
-                              "path",
-                              "Unknown",
-                          ),
+                          severity=extra.get("severity", "UNKNOWN"),
+                          rule=result.get("check_id", "Unknown"),
+                          path=result.get("path", "Unknown"),
                           line=result.get(
                               "start",
                               {},
-                          ).get(
-                              "line",
-                              "Unknown",
-                          ),
+                          ).get("line", "Unknown"),
                       )
                   )
 
@@ -249,9 +234,7 @@ jobs:
                   "No security findings were detected."
               )
 
-          github_summary = os.environ.get(
-              "GITHUB_STEP_SUMMARY"
-          )
+          github_summary = os.environ.get("GITHUB_STEP_SUMMARY")
 
           if github_summary:
               with open(
@@ -259,12 +242,10 @@ jobs:
                   "a",
                   encoding="utf-8",
               ) as file:
-                  file.write(
-                      "\n".join(summary) + "\n"
-                  )
+                  file.write("\n".join(summary) + "\n")
           PYTHON
 
-      # 9. Upload reports to GitHub Actions
+      # 9. Upload the reports to GitHub Actions
       - name: Upload Semgrep reports
         if: always()
         uses: actions/upload-artifact@v4
@@ -276,7 +257,7 @@ jobs:
           if-no-files-found: warn
           retention-days: 30
 
-      # 10. Create Jira issue automatically
+      # 10. Create a Jira security issue
       - name: Create Jira security issue
         id: jira
         if: always()
@@ -288,8 +269,8 @@ jobs:
           JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
         run: python scripts/create_jira_issue.py
 
-      # 11. Attach Semgrep report to created Jira issue
-      - name: Attach Semgrep report to Jira issue
+      # 11. Attach the Semgrep JSON report to the Jira issue
+      - name: Attach Semgrep report to Jira
         if: always() && steps.jira.outputs.issue_key != ''
         continue-on-error: true
         env:
@@ -299,6 +280,7 @@ jobs:
           JIRA_ISSUE_KEY: ${{ steps.jira.outputs.issue_key }}
         run: |
           curl \
+            --fail-with-body \
             --request POST \
             --url "${JIRA_BASE_URL}/rest/api/3/issue/${JIRA_ISSUE_KEY}/attachments" \
             --user "${JIRA_EMAIL}:${JIRA_API_TOKEN}" \
@@ -306,13 +288,15 @@ jobs:
             --header "Accept: application/json" \
             --form "file=@semgrep-report.json"
 
-      # 12. Display Jira result
+      # 12. Display the Jira integration result
       - name: Display Jira integration result
         if: always()
         run: |
           if [ -n "${{ steps.jira.outputs.issue_key }}" ]; then
-            echo "Jira issue created: ${{ steps.jira.outputs.issue_key }}"
-            echo "Jira URL: https://cms-software-security.atlassian.net/browse/${{ steps.jira.outputs.issue_key }}"
+            echo "Jira issue created successfully."
+            echo "Issue key: ${{ steps.jira.outputs.issue_key }}"
+            echo "Issue URL: https://cms-software-security.atlassian.net/browse/${{ steps.jira.outputs.issue_key }}"
+            echo "The Semgrep JSON report was uploaded to the Jira issue."
           else
             echo "No Jira issue key was returned."
             echo "Check the Create Jira security issue step."
