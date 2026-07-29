@@ -22,16 +22,20 @@ def load_json(
     path: Path,
     default: Any,
 ) -> Any:
-    """Safely load a JSON file."""
+    """Load a JSON report safely."""
 
     if not path.exists():
         print(f"Warning: {path} does not exist.")
         return default
 
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        return json.loads(
+            path.read_text(encoding="utf-8")
+        )
     except (OSError, json.JSONDecodeError) as error:
-        print(f"Warning: Unable to read {path}: {error}")
+        print(
+            f"Warning: Unable to read {path}: {error}"
+        )
         return default
 
 
@@ -39,23 +43,29 @@ def write_github_output(
     name: str,
     value: str | int,
 ) -> None:
-    """Write a value for later GitHub Actions steps."""
+    """Make an output available to later GitHub Actions steps."""
 
     output_path = os.environ.get("GITHUB_OUTPUT")
 
     if not output_path:
         return
 
-    with open(output_path, "a", encoding="utf-8") as output_file:
-        output_file.write(f"{name}={value}\n")
+    with open(
+        output_path,
+        "a",
+        encoding="utf-8",
+    ) as output_file:
+        output_file.write(
+            f"{name}={value}\n"
+        )
 
 
 def normalise_semgrep(
     report: dict[str, Any],
 ) -> list[dict[str, Any]]:
-    """Convert Semgrep findings into a common structure."""
+    """Convert Semgrep findings into a shared format."""
 
-    normalised: list[dict[str, Any]] = []
+    findings: list[dict[str, Any]] = []
 
     severity_mapping = {
         "CRITICAL": "CRITICAL",
@@ -73,7 +83,10 @@ def normalise_semgrep(
         end = result.get("end", {})
 
         original_severity = str(
-            extra.get("severity", "UNKNOWN")
+            extra.get(
+                "severity",
+                "UNKNOWN",
+            )
         ).upper()
 
         severity = severity_mapping.get(
@@ -86,29 +99,55 @@ def normalise_semgrep(
         if isinstance(cwe, str):
             cwe = [cwe]
 
+        if not isinstance(cwe, list):
+            cwe = []
+
         owasp = metadata.get("owasp", [])
 
         if isinstance(owasp, str):
             owasp = [owasp]
 
-        references = metadata.get("references", [])
+        if not isinstance(owasp, list):
+            owasp = []
+
+        references = metadata.get(
+            "references",
+            [],
+        )
 
         if isinstance(references, str):
             references = [references]
 
-        normalised.append(
+        if not isinstance(references, list):
+            references = []
+
+        recommendation = (
+            extra.get("fix")
+            or metadata.get("fix")
+            or (
+                "Review the affected code and replace the insecure "
+                "implementation with a validated secure coding "
+                "approach. Apply the fix and rerun the automated "
+                "security workflow."
+            )
+        )
+
+        findings.append(
             {
                 "tool": "Semgrep",
-                "type": "SAST",
+                "type": "Static Application Security Testing",
                 "severity": severity,
                 "original_severity": original_severity,
                 "title": extra.get(
                     "message",
-                    result.get("check_id", "Semgrep finding"),
+                    result.get(
+                        "check_id",
+                        "Semgrep security finding",
+                    ),
                 ),
                 "rule_id": result.get(
                     "check_id",
-                    "unknown-rule",
+                    "unknown-semgrep-rule",
                 ),
                 "file": result.get(
                     "path",
@@ -117,63 +156,66 @@ def normalise_semgrep(
                 "line": start.get("line"),
                 "column": start.get("col"),
                 "end_line": end.get("line"),
+                "end_column": end.get("col"),
                 "cwe": cwe,
                 "owasp": owasp,
                 "references": references,
-                "recommendation": (
-                    extra.get("fix")
-                    or metadata.get("fix")
-                    or (
-                        "Review the affected code and replace the "
-                        "insecure implementation with a validated, "
-                        "secure coding approach."
-                    )
-                ),
+                "recommendation": recommendation,
             }
         )
 
-    return normalised
+    return findings
 
 
 def normalise_gitleaks(
     report: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    """Convert Gitleaks findings into the common structure."""
+    """Convert Gitleaks results into the shared format."""
 
-    normalised: list[dict[str, Any]] = []
+    findings: list[dict[str, Any]] = []
 
-    for finding in report:
+    for result in report:
         rule_id = (
-            finding.get("RuleID")
-            or finding.get("RuleId")
-            or finding.get("rule_id")
+            result.get("RuleID")
+            or result.get("RuleId")
+            or result.get("rule_id")
             or "secret-detected"
         )
 
         description = (
-            finding.get("Description")
-            or finding.get("description")
-            or "Potential secret detected in the repository."
+            result.get("Description")
+            or result.get("description")
+            or "A potential exposed secret was detected."
         )
 
         file_path = (
-            finding.get("File")
-            or finding.get("file")
+            result.get("File")
+            or result.get("file")
             or "Unknown file"
         )
 
-        line_number = (
-            finding.get("StartLine")
-            or finding.get("start_line")
+        start_line = (
+            result.get("StartLine")
+            or result.get("start_line")
+        )
+
+        start_column = (
+            result.get("StartColumn")
+            or result.get("start_column")
+        )
+
+        end_line = (
+            result.get("EndLine")
+            or result.get("end_line")
         )
 
         commit = (
-            finding.get("Commit")
-            or finding.get("commit")
+            result.get("Commit")
+            or result.get("commit")
             or ""
         )
 
-        normalised.append(
+        findings.append(
             {
                 "tool": "Gitleaks",
                 "type": "Secret Scanning",
@@ -182,29 +224,34 @@ def normalise_gitleaks(
                 "title": description,
                 "rule_id": rule_id,
                 "file": file_path,
-                "line": line_number,
-                "column": finding.get("StartColumn"),
-                "end_line": finding.get("EndLine"),
+                "line": start_line,
+                "column": start_column,
+                "end_line": end_line,
                 "commit": commit,
-                "cwe": ["CWE-798"],
-                "owasp": ["A07:2021 Identification and Authentication Failures"],
+                "cwe": [
+                    "CWE-798: Use of Hard-coded Credentials"
+                ],
+                "owasp": [
+                    "A07:2021 Identification and Authentication Failures"
+                ],
                 "references": [],
                 "recommendation": (
                     "Remove the exposed secret from the source code "
-                    "and Git history, revoke or rotate the affected "
-                    "credential, and store the replacement in GitHub "
-                    "Actions Secrets or another approved secret manager."
+                    "and Git history. Revoke or rotate the affected "
+                    "credential immediately. Store the replacement "
+                    "credential in GitHub Actions Secrets or another "
+                    "approved secret-management system."
                 ),
             }
         )
 
-    return normalised
+    return findings
 
 
 def calculate_risk_score(
     severity_counts: Counter[str],
 ) -> tuple[int, str]:
-    """Calculate a capped project risk score."""
+    """Calculate a capped security risk score."""
 
     raw_score = (
         severity_counts.get("CRITICAL", 0) * 10
@@ -213,7 +260,10 @@ def calculate_risk_score(
         + severity_counts.get("LOW", 0)
     )
 
-    risk_score = min(raw_score, 100)
+    risk_score = min(
+        raw_score,
+        100,
+    )
 
     if risk_score >= 75:
         risk_level = "CRITICAL"
@@ -230,44 +280,43 @@ def calculate_risk_score(
 
 
 def generate_text_report(
-    data: dict[str, Any],
+    report: dict[str, Any],
 ) -> None:
-    """Generate a readable plain-text security report."""
+    """Generate a plain-text report."""
 
-    summary = data["summary"]
-    repository = data["scan"]["repository"]
-    branch = data["scan"]["branch"]
-    commit = data["scan"]["commit"]
+    summary = report["summary"]
+    scan = report["scan"]
+    findings = report["findings"]
 
     lines = [
         "Courier Management System",
-        "Automated Multi-Tool Security Report",
-        "=" * 68,
+        "Automated Multi-Tool Security Assessment",
+        "=" * 72,
         "",
         "SCAN INFORMATION",
-        "-" * 68,
-        f"Repository: {repository}",
-        f"Branch: {branch}",
-        f"Commit: {commit}",
-        f"Generated: {data['scan']['generated_at']}",
+        "-" * 72,
+        f"Repository: {scan['repository']}",
+        f"Branch: {scan['branch']}",
+        f"Commit: {scan['commit']}",
+        f"Workflow run ID: {scan['workflow_run_id']}",
+        f"Generated: {scan['generated_at']}",
         "",
         "EXECUTIVE SUMMARY",
-        "-" * 68,
+        "-" * 72,
         f"Total findings: {summary['total']}",
         f"Semgrep findings: {summary['semgrep_total']}",
         f"Gitleaks findings: {summary['gitleaks_total']}",
-        f"Critical: {summary['critical']}",
-        f"High: {summary['high']}",
-        f"Medium: {summary['medium']}",
-        f"Low: {summary['low']}",
+        f"Critical findings: {summary['critical']}",
+        f"High findings: {summary['high']}",
+        f"Medium findings: {summary['medium']}",
+        f"Low findings: {summary['low']}",
         f"Risk score: {summary['risk_score']}/100",
         f"Risk level: {summary['risk_level']}",
+        f"Quality gate: {summary['quality_gate']}",
         "",
         "DETAILED FINDINGS",
-        "-" * 68,
+        "-" * 72,
     ]
-
-    findings = data["findings"]
 
     if not findings:
         lines.extend(
@@ -278,10 +327,23 @@ def generate_text_report(
             ]
         )
 
-    for number, finding in enumerate(findings, start=1):
-        cwe_text = ", ".join(finding.get("cwe", [])) or "Not provided"
+    for number, finding in enumerate(
+        findings,
+        start=1,
+    ):
+        cwe_text = (
+            ", ".join(
+                str(item)
+                for item in finding.get("cwe", [])
+            )
+            or "Not provided"
+        )
+
         owasp_text = (
-            ", ".join(finding.get("owasp", []))
+            ", ".join(
+                str(item)
+                for item in finding.get("owasp", [])
+            )
             or "Not provided"
         )
 
@@ -289,36 +351,74 @@ def generate_text_report(
             [
                 "",
                 f"Finding {number}",
-                f"Tool: {finding['tool']}",
+                "~" * 72,
+                f"Scanner: {finding['tool']}",
                 f"Category: {finding['type']}",
                 f"Severity: {finding['severity']}",
+                f"Original severity: "
+                f"{finding['original_severity']}",
                 f"Rule: {finding['rule_id']}",
                 f"File: {finding['file']}",
-                f"Line: {finding.get('line') or 'Unknown'}",
+                f"Line: "
+                f"{finding.get('line') or 'Unknown'}",
                 f"Description: {finding['title']}",
                 f"CWE: {cwe_text}",
                 f"OWASP: {owasp_text}",
-                f"Recommendation: {finding['recommendation']}",
+                (
+                    "Recommendation: "
+                    f"{finding['recommendation']}"
+                ),
             ]
         )
 
     lines.extend(
         [
             "",
-            "QUALITY GATE",
-            "-" * 68,
-            (
-                "FAILED - Critical, High, or secret findings exist."
-                if summary["quality_gate"] == "FAILED"
-                else "PASSED - No Critical or High findings exist."
-            ),
+            "SECURITY QUALITY GATE",
+            "-" * 72,
+        ]
+    )
+
+    if summary["quality_gate"] == "REVIEW REQUIRED":
+        lines.extend(
+            [
+                "Status: REVIEW REQUIRED",
+                "",
+                (
+                    "Critical, High, or exposed-secret findings "
+                    "were detected. The findings should be reviewed "
+                    "and remediated before deployment."
+                ),
+                "",
+                (
+                    "The GitHub Actions workflow remains successful "
+                    "because the quality gate is operating in "
+                    "reporting mode."
+                ),
+            ]
+        )
+    else:
+        lines.extend(
+            [
+                "Status: PASSED",
+                "",
+                (
+                    "No Critical, High, or exposed-secret findings "
+                    "were detected."
+                ),
+            ]
+        )
+
+    lines.extend(
+        [
             "",
-            "LIMITATIONS",
-            "-" * 68,
+            "ASSESSMENT LIMITATIONS",
+            "-" * 72,
             (
-                "Automated tools may produce false positives and "
-                "cannot identify every security weakness. Findings "
-                "should be reviewed and validated by a security analyst."
+                "Automated scanners may produce false positives and "
+                "cannot detect every possible vulnerability. All "
+                "findings should be validated through code review "
+                "and authorised manual security testing."
             ),
             "",
         ]
@@ -334,18 +434,35 @@ def finding_html(
     number: int,
     finding: dict[str, Any],
 ) -> str:
-    """Create an HTML card for one finding."""
+    """Generate one detailed HTML finding card."""
 
-    cwe_text = ", ".join(finding.get("cwe", [])) or "Not provided"
-    owasp_text = ", ".join(
-        finding.get("owasp", [])
-    ) or "Not provided"
+    cwe_text = (
+        ", ".join(
+            str(item)
+            for item in finding.get("cwe", [])
+        )
+        or "Not provided"
+    )
+
+    owasp_text = (
+        ", ".join(
+            str(item)
+            for item in finding.get("owasp", [])
+        )
+        or "Not provided"
+    )
 
     return f"""
     <section class="finding">
         <div class="finding-header">
-            <h3>Finding {number}: {html.escape(str(finding["rule_id"]))}</h3>
-            <span class="severity {html.escape(finding["severity"].lower())}">
+            <h3>
+                Finding {number}:
+                {html.escape(str(finding["rule_id"]))}
+            </h3>
+
+            <span class="severity {html.escape(
+                finding["severity"].lower()
+            )}">
                 {html.escape(finding["severity"])}
             </span>
         </div>
@@ -355,22 +472,35 @@ def finding_html(
                 <th>Scanner</th>
                 <td>{html.escape(finding["tool"])}</td>
             </tr>
+
             <tr>
                 <th>Category</th>
                 <td>{html.escape(finding["type"])}</td>
             </tr>
+
             <tr>
                 <th>Affected file</th>
-                <td><code>{html.escape(str(finding["file"]))}</code></td>
+                <td>
+                    <code>
+                        {html.escape(str(finding["file"]))}
+                    </code>
+                </td>
             </tr>
+
             <tr>
                 <th>Line</th>
-                <td>{html.escape(str(finding.get("line") or "Unknown"))}</td>
+                <td>
+                    {html.escape(
+                        str(finding.get("line") or "Unknown")
+                    )}
+                </td>
             </tr>
+
             <tr>
                 <th>CWE</th>
                 <td>{html.escape(cwe_text)}</td>
             </tr>
+
             <tr>
                 <th>OWASP</th>
                 <td>{html.escape(owasp_text)}</td>
@@ -378,55 +508,94 @@ def finding_html(
         </table>
 
         <h4>Description</h4>
-        <p>{html.escape(str(finding["title"]))}</p>
 
-        <h4>Recommended remediation</h4>
-        <p>{html.escape(str(finding["recommendation"]))}</p>
+        <p>
+            {html.escape(str(finding["title"]))}
+        </p>
+
+        <h4>Recommended Remediation</h4>
+
+        <p>
+            {html.escape(str(finding["recommendation"]))}
+        </p>
 
         <h4>Verification</h4>
+
         <p>
-            Apply the recommended remediation, review the modified code,
-            and run the GitHub Actions security workflow again.
+            Apply the recommended remediation, review the modified
+            source code and run the GitHub Actions security workflow
+            again.
         </p>
     </section>
     """
 
 
 def generate_html_report(
-    data: dict[str, Any],
+    report: dict[str, Any],
 ) -> None:
-    """Generate a styled HTML security report."""
+    """Generate a styled professional HTML report."""
 
-    summary = data["summary"]
-    findings = data["findings"]
+    summary = report["summary"]
+    scan = report["scan"]
+    findings = report["findings"]
 
     finding_sections = "\n".join(
-        finding_html(number, finding)
-        for number, finding in enumerate(findings, start=1)
+        finding_html(
+            number,
+            finding,
+        )
+        for number, finding in enumerate(
+            findings,
+            start=1,
+        )
     )
 
     if not finding_sections:
         finding_sections = """
         <section class="clean-result">
-            <h3>No findings detected</h3>
+            <h3>No Security Findings Detected</h3>
+
             <p>
                 Semgrep and Gitleaks did not detect security findings
-                in this scan.
+                during this scan.
             </p>
         </section>
         """
+
+    if summary["quality_gate"] == "REVIEW REQUIRED":
+        gate_class = "gate-review"
+        gate_icon = "⚠️"
+        gate_message = (
+            "Critical, High, or exposed-secret findings were "
+            "detected. Review the findings before deployment."
+        )
+    else:
+        gate_class = "gate-pass"
+        gate_icon = "✅"
+        gate_message = (
+            "No Critical, High, or exposed-secret findings "
+            "were detected."
+        )
 
     document = f"""<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
+
     <meta
         name="viewport"
         content="width=device-width, initial-scale=1.0"
     >
-    <title>Automated Security Report</title>
+
+    <title>
+        Courier Management System Security Report
+    </title>
 
     <style>
+        * {{
+            box-sizing: border-box;
+        }}
+
         body {{
             margin: 0;
             background: #f3f5f8;
@@ -453,8 +622,15 @@ def generate_html_report(
             font-size: 34px;
         }}
 
+        .cover h2 {{
+            margin: 0 0 25px;
+            color: #d1d5db;
+            font-size: 20px;
+            font-weight: normal;
+        }}
+
         .cover p {{
-            margin: 4px 0;
+            margin: 5px 0;
             color: #d1d5db;
         }}
 
@@ -468,7 +644,8 @@ def generate_html_report(
 
         .metrics {{
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            grid-template-columns:
+                repeat(auto-fit, minmax(150px, 1fr));
             gap: 15px;
         }}
 
@@ -476,6 +653,7 @@ def generate_html_report(
             padding: 18px;
             border: 1px solid #e5e7eb;
             border-radius: 10px;
+            background: #ffffff;
         }}
 
         .metric strong {{
@@ -502,12 +680,18 @@ def generate_html_report(
             align-items: center;
         }}
 
+        .finding-header h3 {{
+            margin: 0;
+            overflow-wrap: anywhere;
+        }}
+
         .severity {{
             padding: 6px 12px;
             border-radius: 999px;
             font-size: 12px;
             font-weight: bold;
             color: white;
+            white-space: nowrap;
         }}
 
         .severity.critical {{
@@ -557,11 +741,19 @@ def generate_html_report(
         }}
 
         .gate-pass {{
-            color: #047857;
+            padding: 20px;
+            border-radius: 10px;
+            color: #065f46;
+            background: #ecfdf5;
+            border: 1px solid #10b981;
         }}
 
-        .gate-fail {{
-            color: #b91c1c;
+        .gate-review {{
+            padding: 20px;
+            border-radius: 10px;
+            color: #92400e;
+            background: #fffbeb;
+            border: 1px solid #f59e0b;
         }}
 
         footer {{
@@ -569,29 +761,54 @@ def generate_html_report(
             color: #6b7280;
             text-align: center;
         }}
+
+        @media print {{
+            body {{
+                background: white;
+            }}
+
+            .container {{
+                width: 100%;
+                margin: 0;
+            }}
+
+            .section,
+            .cover {{
+                box-shadow: none;
+            }}
+        }}
     </style>
 </head>
 
 <body>
     <main class="container">
         <section class="cover">
-            <h1>Automated Security Assessment Report</h1>
-            <p>Courier Management System</p>
+            <h1>
+                Automated Security Assessment Report
+            </h1>
+
+            <h2>
+                Courier Management System
+            </h2>
+
             <p>
-                Repository:
-                {html.escape(data["scan"]["repository"])}
+                <strong>Repository:</strong>
+                {html.escape(scan["repository"])}
             </p>
+
             <p>
-                Branch:
-                {html.escape(data["scan"]["branch"])}
+                <strong>Branch:</strong>
+                {html.escape(scan["branch"])}
             </p>
+
             <p>
-                Commit:
-                {html.escape(data["scan"]["commit"])}
+                <strong>Commit:</strong>
+                {html.escape(scan["commit"])}
             </p>
+
             <p>
-                Generated:
-                {html.escape(data["scan"]["generated_at"])}
+                <strong>Generated:</strong>
+                {html.escape(scan["generated_at"])}
             </p>
         </section>
 
@@ -611,7 +828,7 @@ def generate_html_report(
 
                 <div class="metric">
                     <strong>{summary["gitleaks_total"]}</strong>
-                    <span>Exposed secrets</span>
+                    <span>Gitleaks findings</span>
                 </div>
 
                 <div class="metric">
@@ -654,38 +871,45 @@ def generate_html_report(
 
         <section class="section">
             <h2>Security Quality Gate</h2>
-            <h3 class="{
-                "gate-fail"
-                if summary["quality_gate"] == "FAILED"
-                else "gate-pass"
-            }">
-                {summary["quality_gate"]}
-            </h3>
 
-            <p>
-                The workflow fails when a Critical, High, or exposed
-                secret finding is detected.
-            </p>
+            <div class="{gate_class}">
+                <h3>
+                    {gate_icon}
+                    {html.escape(summary["quality_gate"])}
+                </h3>
+
+                <p>
+                    {html.escape(gate_message)}
+                </p>
+
+                <p>
+                    The GitHub Actions workflow remains successful
+                    because the quality gate operates in reporting
+                    mode.
+                </p>
+            </div>
         </section>
 
         <section class="section">
             <h2>Detailed Findings</h2>
+
             {finding_sections}
         </section>
 
         <section class="section">
             <h2>Assessment Limitations</h2>
+
             <p>
                 Automated scanners may generate false positives and
                 cannot identify every possible security weakness.
-                Findings should be validated through code review and
-                authorised manual security testing.
+                Findings should be validated through secure code
+                review and authorised manual security testing.
             </p>
         </section>
 
         <footer>
-            Generated automatically by GitHub Actions, Semgrep and
-            Gitleaks.
+            Generated automatically by GitHub Actions,
+            Semgrep and Gitleaks.
         </footer>
     </main>
 </body>
@@ -699,16 +923,19 @@ def generate_html_report(
 
 
 def generate_github_summary(
-    data: dict[str, Any],
+    report: dict[str, Any],
 ) -> None:
-    """Add the scan results to the GitHub Actions summary page."""
+    """Add security results to the GitHub Actions summary."""
 
-    output_path = os.environ.get("GITHUB_STEP_SUMMARY")
+    summary_path = os.environ.get(
+        "GITHUB_STEP_SUMMARY"
+    )
 
-    if not output_path:
+    if not summary_path:
         return
 
-    summary = data["summary"]
+    summary = report["summary"]
+    findings = report["findings"]
 
     lines = [
         "# Multi-Tool Security Scan",
@@ -717,8 +944,10 @@ def generate_github_summary(
         "",
         "| Metric | Result |",
         "|---|---:|",
-        f"| Semgrep findings | {summary['semgrep_total']} |",
-        f"| Gitleaks findings | {summary['gitleaks_total']} |",
+        f"| Semgrep findings | "
+        f"{summary['semgrep_total']} |",
+        f"| Gitleaks findings | "
+        f"{summary['gitleaks_total']} |",
         f"| Critical | {summary['critical']} |",
         f"| High | {summary['high']} |",
         f"| Medium | {summary['medium']} |",
@@ -730,8 +959,10 @@ def generate_github_summary(
         "",
     ]
 
-    if not data["findings"]:
-        lines.append("✅ No security findings were detected.")
+    if not findings:
+        lines.append(
+            "✅ No security findings were detected."
+        )
     else:
         lines.extend(
             [
@@ -742,26 +973,65 @@ def generate_github_summary(
             ]
         )
 
-        for finding in data["findings"][:20]:
+        for finding in findings[:20]:
+            rule = str(
+                finding["rule_id"]
+            ).replace(
+                "|",
+                "\\|",
+            )
+
+            file_path = str(
+                finding["file"]
+            ).replace(
+                "|",
+                "\\|",
+            )
+
             lines.append(
-                "| {tool} | {severity} | `{rule}` | `{file}` | "
-                "{line} |".format(
+                "| {tool} | {severity} | `{rule}` | "
+                "`{file}` | {line} |".format(
                     tool=finding["tool"],
                     severity=finding["severity"],
-                    rule=str(finding["rule_id"]).replace("|", "\\|"),
-                    file=str(finding["file"]).replace("|", "\\|"),
-                    line=finding.get("line") or "Unknown",
+                    rule=rule,
+                    file=file_path,
+                    line=(
+                        finding.get("line")
+                        or "Unknown"
+                    ),
                 )
             )
 
-    with open(output_path, "a", encoding="utf-8") as output_file:
-        output_file.write("\n".join(lines) + "\n")
+        if len(findings) > 20:
+            lines.extend(
+                [
+                    "",
+                    (
+                        f"Only the first 20 of "
+                        f"{len(findings)} findings are shown."
+                    ),
+                ]
+            )
+
+    with open(
+        summary_path,
+        "a",
+        encoding="utf-8",
+    ) as summary_file:
+        summary_file.write(
+            "\n".join(lines) + "\n"
+        )
 
 
 def main() -> int:
+    """Run the combined security analysis."""
+
     semgrep_report = load_json(
         SEMGREP_REPORT,
-        {"results": [], "errors": []},
+        {
+            "results": [],
+            "errors": [],
+        },
     )
 
     gitleaks_report = load_json(
@@ -769,37 +1039,79 @@ def main() -> int:
         [],
     )
 
-    if not isinstance(semgrep_report, dict):
-        semgrep_report = {"results": [], "errors": []}
+    if not isinstance(
+        semgrep_report,
+        dict,
+    ):
+        print(
+            "Semgrep report has an invalid format."
+        )
 
-    if not isinstance(gitleaks_report, list):
+        semgrep_report = {
+            "results": [],
+            "errors": [],
+        }
+
+    if not isinstance(
+        gitleaks_report,
+        list,
+    ):
+        print(
+            "Gitleaks report has an invalid format."
+        )
+
         gitleaks_report = []
 
-    semgrep_findings = normalise_semgrep(semgrep_report)
-    gitleaks_findings = normalise_gitleaks(gitleaks_report)
+    semgrep_findings = normalise_semgrep(
+        semgrep_report
+    )
 
-    findings = semgrep_findings + gitleaks_findings
+    gitleaks_findings = normalise_gitleaks(
+        gitleaks_report
+    )
+
+    findings = (
+        semgrep_findings
+        + gitleaks_findings
+    )
 
     severity_counts: Counter[str] = Counter(
-        finding["severity"] for finding in findings
+        finding["severity"]
+        for finding in findings
     )
 
     risk_score, risk_level = calculate_risk_score(
         severity_counts
     )
 
-    should_fail = (
-        severity_counts.get("CRITICAL", 0) > 0
-        or severity_counts.get("HIGH", 0) > 0
+    serious_findings_exist = (
+        severity_counts.get(
+            "CRITICAL",
+            0,
+        )
+        > 0
+        or severity_counts.get(
+            "HIGH",
+            0,
+        )
+        > 0
+        or len(gitleaks_findings) > 0
     )
 
-    quality_gate = "FAILED" if should_fail else "PASSED"
+    quality_gate = (
+        "REVIEW REQUIRED"
+        if serious_findings_exist
+        else "PASSED"
+    )
 
-    data = {
+    report = {
         "scan": {
             "repository": os.environ.get(
                 "GITHUB_REPOSITORY",
-                "Hashreena/courier-management-system-security",
+                (
+                    "Hashreena/"
+                    "courier-management-system-security"
+                ),
             ),
             "branch": os.environ.get(
                 "GITHUB_REF_NAME",
@@ -818,83 +1130,169 @@ def main() -> int:
             ).isoformat(),
         },
         "summary": {
-            "semgrep_total": len(semgrep_findings),
-            "gitleaks_total": len(gitleaks_findings),
-            "critical": severity_counts.get("CRITICAL", 0),
-            "high": severity_counts.get("HIGH", 0),
-            "medium": severity_counts.get("MEDIUM", 0),
-            "low": severity_counts.get("LOW", 0),
+            "semgrep_total": len(
+                semgrep_findings
+            ),
+            "gitleaks_total": len(
+                gitleaks_findings
+            ),
+            "critical": severity_counts.get(
+                "CRITICAL",
+                0,
+            ),
+            "high": severity_counts.get(
+                "HIGH",
+                0,
+            ),
+            "medium": severity_counts.get(
+                "MEDIUM",
+                0,
+            ),
+            "low": severity_counts.get(
+                "LOW",
+                0,
+            ),
             "total": len(findings),
             "risk_score": risk_score,
             "risk_level": risk_level,
             "quality_gate": quality_gate,
+            "workflow_status": "SUCCESS",
+            "quality_gate_mode": "REPORTING",
         },
         "scanner_errors": {
-            "semgrep": semgrep_report.get("errors", []),
+            "semgrep": semgrep_report.get(
+                "errors",
+                [],
+            ),
         },
         "findings": findings,
     }
 
     COMBINED_REPORT.write_text(
-        json.dumps(data, indent=2),
+        json.dumps(
+            report,
+            indent=2,
+        ),
         encoding="utf-8",
     )
 
-    generate_text_report(data)
-    generate_html_report(data)
-    generate_github_summary(data)
+    generate_text_report(report)
+    generate_html_report(report)
+    generate_github_summary(report)
 
     write_github_output(
         "semgrep_total",
         len(semgrep_findings),
     )
+
     write_github_output(
         "gitleaks_total",
         len(gitleaks_findings),
     )
+
     write_github_output(
         "critical",
-        severity_counts.get("CRITICAL", 0),
+        severity_counts.get(
+            "CRITICAL",
+            0,
+        ),
     )
+
     write_github_output(
         "high",
-        severity_counts.get("HIGH", 0),
+        severity_counts.get(
+            "HIGH",
+            0,
+        ),
     )
+
     write_github_output(
         "medium",
-        severity_counts.get("MEDIUM", 0),
+        severity_counts.get(
+            "MEDIUM",
+            0,
+        ),
     )
+
     write_github_output(
         "low",
-        severity_counts.get("LOW", 0),
+        severity_counts.get(
+            "LOW",
+            0,
+        ),
     )
+
     write_github_output(
         "total",
         len(findings),
     )
+
     write_github_output(
         "risk_score",
         risk_score,
     )
+
     write_github_output(
         "risk_level",
         risk_level,
     )
+
     write_github_output(
-        "has_findings",
-        str(bool(findings)).lower(),
-    )
-    write_github_output(
-        "should_fail",
-        str(should_fail).lower(),
+        "quality_gate",
+        quality_gate,
     )
 
-    print("Combined analysis completed.")
-    print(f"Semgrep findings: {len(semgrep_findings)}")
-    print(f"Gitleaks findings: {len(gitleaks_findings)}")
-    print(f"Total findings: {len(findings)}")
-    print(f"Risk score: {risk_score}/100")
-    print(f"Quality gate: {quality_gate}")
+    write_github_output(
+        "has_findings",
+        str(
+            bool(findings)
+        ).lower(),
+    )
+
+    write_github_output(
+        "should_fail",
+        str(
+            serious_findings_exist
+        ).lower(),
+    )
+
+    print(
+        "Combined security analysis completed."
+    )
+
+    print(
+        f"Semgrep findings: "
+        f"{len(semgrep_findings)}"
+    )
+
+    print(
+        f"Gitleaks findings: "
+        f"{len(gitleaks_findings)}"
+    )
+
+    print(
+        f"Total findings: {len(findings)}"
+    )
+
+    print(
+        f"Risk score: {risk_score}/100"
+    )
+
+    print(
+        f"Risk level: {risk_level}"
+    )
+
+    print(
+        f"Quality gate: {quality_gate}"
+    )
+
+    print(
+        "Quality gate mode: REPORTING"
+    )
+
+    print(
+        "Workflow status: SUCCESS"
+    )
 
     return 0
 
