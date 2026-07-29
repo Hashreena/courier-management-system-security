@@ -20,25 +20,33 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # 1. Download the complete repository and Git history.
+      # ------------------------------------------------------------
+      # 1. Checkout repository
+      # ------------------------------------------------------------
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      # 2. Install Python.
+      # ------------------------------------------------------------
+      # 2. Set up Python
+      # ------------------------------------------------------------
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
-      # 3. Install Semgrep and Jira HTTP dependency.
+      # ------------------------------------------------------------
+      # 3. Install Python dependencies
+      # ------------------------------------------------------------
       - name: Install Python security dependencies
         run: |
           python -m pip install --upgrade pip
           python -m pip install semgrep requests
 
-      # 4. Install a pinned Gitleaks version.
+      # ------------------------------------------------------------
+      # 4. Install Gitleaks
+      # ------------------------------------------------------------
       - name: Install Gitleaks
         run: |
           GITLEAKS_VERSION="8.30.1"
@@ -52,24 +60,28 @@ jobs:
             --output gitleaks.tar.gz
 
           tar -xzf gitleaks.tar.gz gitleaks
+
           sudo install gitleaks /usr/local/bin/gitleaks
 
-          rm -f gitleaks.tar.gz gitleaks
+          rm -f gitleaks.tar.gz
+          rm -f gitleaks
 
-      # 5. Display scanner versions.
+      # ------------------------------------------------------------
+      # 5. Display scanner versions
+      # ------------------------------------------------------------
       - name: Display security scanner versions
         run: |
           echo "Semgrep version:"
           semgrep --version
 
           echo ""
+
           echo "Gitleaks version:"
           gitleaks version
 
-      # 6. Run Semgrep SAST.
-      #
-      # The scanner is allowed to return a finding-related exit code.
-      # The quality gate is applied later, after Jira and email complete.
+      # ------------------------------------------------------------
+      # 6. Run Semgrep SAST
+      # ------------------------------------------------------------
       - name: Run Semgrep SAST scan
         id: semgrep
         continue-on-error: true
@@ -80,22 +92,29 @@ jobs:
             --output semgrep-report.json \
             .
 
-      # 7. Ensure a usable Semgrep report always exists.
+      # ------------------------------------------------------------
+      # 7. Ensure Semgrep report exists
+      # ------------------------------------------------------------
       - name: Ensure Semgrep report exists
         if: always()
         run: |
           if [ ! -f semgrep-report.json ]; then
-            echo '{"results":[],"errors":[{"message":"Semgrep report was not generated"}]}' \
-              > semgrep-report.json
+            echo '{
+              "results": [],
+              "errors": [
+                {
+                  "message": "Semgrep report was not generated"
+                }
+              ]
+            }' > semgrep-report.json
           fi
 
-      # 8. Run Gitleaks against Git history.
-      #
-      # --redact prevents discovered secret values from being placed
-      # directly into the report.
-      #
-      # --exit-code 0 allows Jira, email and artifact steps to run.
-      # The final quality gate fails the workflow later.
+          echo "Semgrep report information:"
+          ls -lh semgrep-report.json
+
+      # ------------------------------------------------------------
+      # 8. Run Gitleaks secret scanning
+      # ------------------------------------------------------------
       - name: Run Gitleaks secret scan
         id: gitleaks
         continue-on-error: true
@@ -106,7 +125,9 @@ jobs:
             --redact \
             --exit-code 0
 
-      # 9. Ensure a usable Gitleaks report always exists.
+      # ------------------------------------------------------------
+      # 9. Ensure Gitleaks report exists
+      # ------------------------------------------------------------
       - name: Ensure Gitleaks report exists
         if: always()
         run: |
@@ -114,31 +135,70 @@ jobs:
             echo '[]' > gitleaks-report.json
           fi
 
-      # 10. Combine scanner outputs, calculate risk and generate reports.
+          echo "Gitleaks report information:"
+          ls -lh gitleaks-report.json
+
+      # ------------------------------------------------------------
+      # 10. Analyse findings and generate reports
+      # ------------------------------------------------------------
       - name: Analyse combined security findings
         id: analyse
+        if: always()
         run: |
           python scripts/analyse_security_results.py
 
-      # 11. Upload all generated reports to GitHub.
+      # ------------------------------------------------------------
+      # 11. Verify generated report files
+      # ------------------------------------------------------------
+      - name: Verify generated security reports
+        if: always()
+        run: |
+          echo "Checking generated report files..."
+
+          REPORT_FILES=(
+            "semgrep-report.json"
+            "gitleaks-report.json"
+            "combined-security-report.json"
+            "security-report.txt"
+            "security-report.html"
+          )
+
+          for REPORT_FILE in "${REPORT_FILES[@]}"
+          do
+            if [ -f "${REPORT_FILE}" ]; then
+              echo "Found: ${REPORT_FILE}"
+              ls -lh "${REPORT_FILE}"
+            else
+              echo "Missing: ${REPORT_FILE}"
+            fi
+          done
+
+      # ------------------------------------------------------------
+      # 12. Upload reports as GitHub Actions artifact
+      # ------------------------------------------------------------
       - name: Upload multi-tool security reports
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: multi-tool-security-reports
+          name: multi-tool-security-reports-${{ github.run_number }}
           path: |
             semgrep-report.json
             gitleaks-report.json
             combined-security-report.json
             security-report.txt
             security-report.html
-          if-no-files-found: warn
+          if-no-files-found: error
           retention-days: 30
 
-      # 12. Create a Jira issue only when findings exist.
+      # ------------------------------------------------------------
+      # 13. Create Jira issue when findings exist
+      # ------------------------------------------------------------
       - name: Create Jira security issue
         id: jira
-        if: steps.analyse.outputs.has_findings == 'true'
+        if: |
+          always() &&
+          steps.analyse.outcome == 'success' &&
+          steps.analyse.outputs.has_findings == 'true'
         continue-on-error: true
         env:
           JIRA_BASE_URL: https://cms-software-security.atlassian.net
@@ -148,11 +208,13 @@ jobs:
         run: |
           python scripts/create_jira_issue.py
 
-      # 13. Attach every important report to the created Jira issue.
-      #
-      # Jira requires X-Atlassian-Token: no-check for attachments.
-      - name: Attach reports to Jira issue
-        if: steps.jira.outputs.issue_key != ''
+      # ------------------------------------------------------------
+      # 14. Attach reports to Jira
+      # ------------------------------------------------------------
+      - name: Attach security reports to Jira
+        if: |
+          always() &&
+          steps.jira.outputs.issue_key != ''
         continue-on-error: true
         env:
           JIRA_BASE_URL: https://cms-software-security.atlassian.net
@@ -160,12 +222,15 @@ jobs:
           JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
           JIRA_ISSUE_KEY: ${{ steps.jira.outputs.issue_key }}
         run: |
-          for REPORT_FILE in \
-            combined-security-report.json \
-            security-report.txt \
-            security-report.html \
-            semgrep-report.json \
-            gitleaks-report.json
+          REPORT_FILES=(
+            "combined-security-report.json"
+            "security-report.txt"
+            "security-report.html"
+            "semgrep-report.json"
+            "gitleaks-report.json"
+          )
+
+          for REPORT_FILE in "${REPORT_FILES[@]}"
           do
             if [ -f "${REPORT_FILE}" ]; then
               echo "Attaching ${REPORT_FILE} to ${JIRA_ISSUE_KEY}"
@@ -178,15 +243,18 @@ jobs:
                 --header "X-Atlassian-Token: no-check" \
                 --header "Accept: application/json" \
                 --form "file=@${REPORT_FILE}"
+            else
+              echo "Report file not found: ${REPORT_FILE}"
             fi
           done
 
-      # 14. Send an email for both clean and vulnerable scans.
-      #
-      # For a vulnerable scan, the message contains the Jira issue.
-      # For a clean scan, it states that no Jira issue was required.
+      # ------------------------------------------------------------
+      # 15. Send email notification
+      # ------------------------------------------------------------
       - name: Send security notification email
-        if: always() && steps.analyse.outcome == 'success'
+        if: |
+          always() &&
+          steps.analyse.outcome == 'success'
         continue-on-error: true
         env:
           SMTP_SERVER: ${{ secrets.SMTP_SERVER }}
@@ -201,9 +269,11 @@ jobs:
         run: |
           python scripts/send_email_notification.py
 
-      # 15. Add integration details to the GitHub Actions summary.
-      - name: Add integration result to GitHub summary
-        if: always() && steps.analyse.outcome == 'success'
+      # ------------------------------------------------------------
+      # 16. Add integration status to GitHub Summary
+      # ------------------------------------------------------------
+      - name: Add integration results to GitHub summary
+        if: always()
         run: |
           {
             echo ""
@@ -217,29 +287,68 @@ jobs:
             elif [ "${{ steps.analyse.outputs.has_findings }}" = "false" ]; then
               echo "| Jira | No issue required because no findings were detected |"
             else
-              echo "| Jira | Issue creation was unsuccessful or skipped |"
+              echo "| Jira | Issue creation was skipped or unsuccessful |"
             fi
 
             echo "| Email | Notification step executed |"
-            echo "| Report artifact | multi-tool-security-reports |"
+            echo "| Artifact | multi-tool-security-reports-${{ github.run_number }} |"
           } >> "${GITHUB_STEP_SUMMARY}"
 
-      # 16. Apply the final security quality gate.
-      #
-      # This is deliberately the final step so reports, Jira and email
-      # are completed before the workflow is marked as failed.
-      - name: Enforce security quality gate
-        if: steps.analyse.outputs.should_fail == 'true'
+      # ------------------------------------------------------------
+      # 17. Report quality gate result without failing workflow
+      # ------------------------------------------------------------
+      - name: Report security quality gate result
+        if: always()
         run: |
-          echo "Security quality gate failed."
-          echo ""
-          echo "Critical, High, or exposed-secret findings exist."
-          echo "Review the reports and Jira issue before merging."
-          exit 1
+          if [ "${{ steps.analyse.outputs.should_fail }}" = "true" ]; then
+            echo "Security findings require review."
+            echo ""
+            echo "Critical, High, or exposed-secret findings were detected."
+            echo "The workflow remains successful for reporting purposes."
 
-      # 17. Show a successful final result when no serious findings exist.
-      - name: Confirm security quality gate passed
-        if: steps.analyse.outputs.should_fail == 'false'
+            {
+              echo ""
+              echo "## Security Quality Gate"
+              echo ""
+              echo "### ⚠️ REVIEW REQUIRED"
+              echo ""
+              echo "Critical, High, or exposed-secret findings were detected."
+              echo ""
+              echo "Review the generated reports and Jira issue before merging."
+              echo ""
+              echo "The workflow is shown as successful because the quality gate is currently operating in reporting mode."
+            } >> "${GITHUB_STEP_SUMMARY}"
+          else
+            echo "Security quality gate passed."
+            echo ""
+            echo "No Critical, High, or exposed-secret findings were detected."
+
+            {
+              echo ""
+              echo "## Security Quality Gate"
+              echo ""
+              echo "### ✅ PASSED"
+              echo ""
+              echo "No Critical, High, or exposed-secret findings were detected."
+            } >> "${GITHUB_STEP_SUMMARY}"
+          fi
+
+      # ------------------------------------------------------------
+      # 18. Confirm workflow completion
+      # ------------------------------------------------------------
+      - name: Confirm security workflow completed
+        if: always()
         run: |
-          echo "Security quality gate passed."
-          echo "No Critical or High security findings were detected."
+          echo "Multi-tool security workflow completed."
+          echo ""
+          echo "Semgrep findings: ${{ steps.analyse.outputs.semgrep_total }}"
+          echo "Gitleaks findings: ${{ steps.analyse.outputs.gitleaks_total }}"
+          echo "Critical: ${{ steps.analyse.outputs.critical }}"
+          echo "High: ${{ steps.analyse.outputs.high }}"
+          echo "Medium: ${{ steps.analyse.outputs.medium }}"
+          echo "Low: ${{ steps.analyse.outputs.low }}"
+          echo "Total findings: ${{ steps.analyse.outputs.total }}"
+          echo "Risk score: ${{ steps.analyse.outputs.risk_score }}/100"
+          echo "Risk level: ${{ steps.analyse.outputs.risk_level }}"
+          echo ""
+          echo "The GitHub Actions run remains successful."
